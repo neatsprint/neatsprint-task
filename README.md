@@ -7,7 +7,7 @@ NeatSprint **Task Service**.
 | Service name | `task` |
 | Container port | `8000` |
 | Host port (dev) | `8003` |
-| Gateway prefix | `/api/v1/task` |
+| Gateway prefix | `/api/v1/tasks` |
 | Database | `db_task` |
 | Owner | OpenCade (AI) / Laksiri (approval) |
 
@@ -24,7 +24,7 @@ cp .env.example .env
 uv run uvicorn neatsprint_task.main:app --reload --port 8000
 ```
 
-Or from the orchestrator: `docker compose up -d task`.
+Or from the orchestrator: `docker compose up -d neatsprint-task`.
 
 ## Endpoints
 
