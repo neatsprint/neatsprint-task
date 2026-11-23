@@ -12,7 +12,7 @@ from neatsprint_lib.db import bind_tenant, get_session, get_tenant_session
 from neatsprint_lib.errors import ApiError
 from neatsprint_lib.events import enqueue
 from neatsprint_lib.ids import new_id
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from neatsprint_task.api.schemas import (
@@ -23,6 +23,7 @@ from neatsprint_task.api.schemas import (
     ItemCreate,
     ItemUpdate,
     ProjectCreate,
+    ProjectTeamsRequest,
     ProjectUpdate,
     RankRequest,
     SprintCreate,
@@ -36,6 +37,7 @@ from neatsprint_task.db.models import (
     ItemComment,
     ItemHistory,
     Project,
+    ProjectTeam,
     Sprint,
 )
 from neatsprint_task.services.storage import (
@@ -239,6 +241,49 @@ async def update_project(
         project.end_date = payload.end_date
     await session.commit()
     return JSONResponse(envelope(request, project_payload(project)))
+
+
+@router.get("/projects/{project_id}/teams", summary="Teams linked to a project")
+async def project_teams(
+    project_id: UUID, principal: ItemView, request: Request, session: SessionDep
+) -> JSONResponse:
+    await _project(session, principal.tenant_id, project_id)
+    rows = (
+        await session.execute(
+            select(ProjectTeam.team_id).where(
+                ProjectTeam.project_id == project_id,
+                ProjectTeam.tenant_id == principal.tenant_id,
+            )
+        )
+    ).scalars()
+    return JSONResponse(envelope(request, [str(item) for item in rows]))
+
+
+@router.put("/projects/{project_id}/teams", summary="Replace a project's teams")
+async def set_project_teams(
+    project_id: UUID,
+    payload: ProjectTeamsRequest,
+    principal: ProjectEdit,
+    request: Request,
+    session: SessionDep,
+) -> JSONResponse:
+    await _project(session, principal.tenant_id, project_id)
+    await session.execute(
+        delete(ProjectTeam).where(
+            ProjectTeam.project_id == project_id,
+            ProjectTeam.tenant_id == principal.tenant_id,
+        )
+    )
+    for team_id in sorted(set(payload.team_ids), key=str):
+        session.add(
+            ProjectTeam(
+                tenant_id=principal.tenant_id,
+                project_id=project_id,
+                team_id=team_id,
+            )
+        )
+    await session.commit()
+    return JSONResponse(envelope(request, {"team_ids": [str(item) for item in payload.team_ids]}))
 
 
 @router.post("/projects/{project_id}/archive", summary="Archive a project")

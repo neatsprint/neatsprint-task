@@ -85,3 +85,7 @@ class AttachmentConfirm(BaseModel):
     file_name: str = Field(min_length=1, max_length=255)
     content_type: str = Field(min_length=3, max_length=128)
     size_bytes: int = Field(ge=1, le=25 * 1024 * 1024)
+
+
+class ProjectTeamsRequest(BaseModel):
+    team_ids: list[UUID] = Field(default_factory=list)
