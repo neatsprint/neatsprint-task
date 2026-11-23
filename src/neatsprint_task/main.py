@@ -18,6 +18,7 @@ from neatsprint_lib.events import run_relay
 from neatsprint_lib.logging import configure_logging
 
 from neatsprint_task.api.router import internal_router, router
+from neatsprint_task.services.event_consumer import run_consumer
 from neatsprint_task.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,18 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                 outbox_stop,
             )
         )
+    consumer_stop: asyncio.Event | None = None
+    consumer_task: asyncio.Task[None] | None = None
+    if settings.redis_url and settings.events_consumer_enabled:
+        consumer_stop = asyncio.Event()
+        consumer_task = asyncio.create_task(
+            run_consumer(
+                settings.redis_url,
+                settings.outbox_stream,
+                settings.events_consumer_group,
+                consumer_stop,
+            )
+        )
     try:
         yield
     finally:
@@ -69,6 +82,13 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                 await asyncio.wait_for(outbox_task, timeout=5)
             except TimeoutError:
                 outbox_task.cancel()
+        if consumer_stop is not None:
+            consumer_stop.set()
+        if consumer_task is not None:
+            try:
+                await asyncio.wait_for(consumer_task, timeout=5)
+            except TimeoutError:
+                consumer_task.cancel()
         if engine is not None:
             await engine.dispose()
 

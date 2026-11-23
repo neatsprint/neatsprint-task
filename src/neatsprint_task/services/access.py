@@ -53,6 +53,11 @@ def clear_membership_cache() -> None:
     _member_cache.clear()
 
 
+def clear_team_membership(tenant_id: UUID | str, team_id: UUID | str) -> bool:
+    """Drop one cached membership set. Returns whether an entry existed."""
+    return _member_cache.pop((str(tenant_id), str(team_id)), None) is not None
+
+
 async def fetch_team_members(
     request: Request, tenant_id: UUID, team_id: UUID
 ) -> frozenset[UUID] | None:

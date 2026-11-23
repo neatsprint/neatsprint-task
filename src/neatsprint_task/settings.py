@@ -9,6 +9,8 @@ class Settings(ServiceSettings):
     team_internal_url: str = "http://neatsprint-team:8000"
     outbox_enabled: bool = True
     outbox_stream: str = "neatsprint.events"
+    events_consumer_enabled: bool = True
+    events_consumer_group: str = "task-access-cache"
     s3_endpoint: str | None = None
     s3_public_endpoint: str | None = None
     s3_bucket: str = "neatsprint"
