@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
 
 from neatsprint_task.services import access
@@ -41,6 +43,54 @@ def _reset_cache() -> None:
     access.clear_membership_cache()
     yield
     access.clear_membership_cache()
+
+
+def _request() -> SimpleNamespace:
+    return SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(
+                    team_internal_url="http://team:8000",
+                    service_token="svc-token",
+                    bootstrap_token="boot-token",
+                )
+            )
+        )
+    )
+
+
+async def test_team_members_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["token"] = request.headers.get("x-service-token")
+        return httpx.Response(200, json={"data": {"user_ids": [str(USER_ID)]}})
+
+    monkeypatch.setattr(
+        access,
+        "_http_client",
+        lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    members = await access.fetch_team_members(_request(), TENANT_ID, TEAM_A)  # type: ignore[arg-type]
+
+    assert members == frozenset({USER_ID})
+    assert seen["url"] == (
+        f"http://team:8000/internal/teams/{TEAM_A}/members?tenant_id={TENANT_ID}"
+    )
+    assert seen["token"] == "svc-token"
+
+
+async def test_team_members_malformed_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": {"user_ids": ["not-a-uuid"]}})
+
+    monkeypatch.setattr(
+        access,
+        "_http_client",
+        lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    assert await access.fetch_team_members(_request(), TENANT_ID, TEAM_A) is None  # type: ignore[arg-type]
 
 
 async def test_team_members_are_cached_per_team(monkeypatch: pytest.MonkeyPatch) -> None:

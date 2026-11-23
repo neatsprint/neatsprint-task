@@ -7,6 +7,7 @@ class Settings(ServiceSettings):
     bootstrap_token: str | None = None
     service_token: str | None = None
     team_internal_url: str = "http://neatsprint-team:8000"
+    iam_internal_url: str = "http://neatsprint-iam:8000"
     outbox_enabled: bool = True
     outbox_stream: str = "neatsprint.events"
     events_consumer_enabled: bool = True

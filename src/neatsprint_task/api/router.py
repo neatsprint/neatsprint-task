@@ -46,6 +46,7 @@ from neatsprint_task.services.access import (
     accessible_projects,
     accessible_sprint,
 )
+from neatsprint_task.services.assignment import ensure_assignable
 from neatsprint_task.services.storage import (
     ALLOWED_TYPES,
     attachment_key,
@@ -344,6 +345,9 @@ async def create_item(
     project = await accessible_project(session, request, principal, payload.project_id)
     if project.status != "ACTIVE":
         raise ApiError(422, "project_archived", "Archived projects are read-only.")
+    await ensure_assignable(
+        session, request, principal.tenant_id, project.id, payload.assignee_id
+    )
 
     sequence = (
         await session.execute(
@@ -413,6 +417,9 @@ async def update_item(
         if field in data:
             setattr(item, field, data[field])
     if "assignee_id" in data:
+        await ensure_assignable(
+            session, request, principal.tenant_id, item.project_id, data["assignee_id"]
+        )
         item.assignee_id = data["assignee_id"]
         history(
             session,
@@ -472,6 +479,9 @@ async def assign_item(
     session: SessionDep,
 ) -> JSONResponse:
     item = await accessible_item(session, request, principal, item_id)
+    await ensure_assignable(
+        session, request, principal.tenant_id, item.project_id, payload.assignee_id
+    )
     before = str(item.assignee_id) if item.assignee_id else None
     item.assignee_id = payload.assignee_id
     history(

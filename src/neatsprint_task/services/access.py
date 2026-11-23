@@ -49,6 +49,10 @@ def _now() -> float:
     return time.monotonic()
 
 
+def _http_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=3)
+
+
 def clear_membership_cache() -> None:
     _member_cache.clear()
 
@@ -68,7 +72,7 @@ async def fetch_team_members(
         logger.warning("team_service_token_missing", extra={"team_id": str(team_id)})
         return None
     try:
-        async with httpx.AsyncClient(timeout=3) as client:
+        async with _http_client() as client:
             response = await client.get(
                 f"{settings.team_internal_url}/internal/teams/{team_id}/members",
                 params={"tenant_id": str(tenant_id)},
@@ -122,15 +126,19 @@ async def project_team_ids(
     return set(rows)
 
 
-async def _member_team_ids(
+async def member_team_ids_for_user(
     request: Request, tenant_id: UUID, team_ids: set[UUID], user_id: UUID
-) -> set[UUID]:
+) -> tuple[set[UUID], set[UUID]]:
+    """Return ``(teams the user belongs to, teams whose membership is unknown)``."""
     member_teams: set[UUID] = set()
+    unknown: set[UUID] = set()
     for team_id in team_ids:
         members = await team_members(request, tenant_id, team_id)
-        if members is not None and user_id in members:
+        if members is None:
+            unknown.add(team_id)
+        elif user_id in members:
             member_teams.add(team_id)
-    return member_teams
+    return member_teams, unknown
 
 
 async def can_access_project(
@@ -141,7 +149,7 @@ async def can_access_project(
     linked = await project_team_ids(session, principal.tenant_id, project_id)
     if not linked:
         return True
-    member_teams = await _member_team_ids(
+    member_teams, _ = await member_team_ids_for_user(
         request, principal.tenant_id, linked, principal.user_id
     )
     return allows_project_access(
@@ -209,7 +217,7 @@ async def accessible_projects(
     linked_by_project: dict[UUID, set[UUID]] = {}
     for project_id, team_id in mappings:
         linked_by_project.setdefault(project_id, set()).add(team_id)
-    member_teams = await _member_team_ids(
+    member_teams, _ = await member_team_ids_for_user(
         request,
         principal.tenant_id,
         {team_id for _, team_id in mappings},
