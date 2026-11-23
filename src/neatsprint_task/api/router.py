@@ -66,6 +66,7 @@ ProjectArchive = Annotated[Principal, Depends(require_permission("task:project:a
 ItemView = Annotated[Principal, Depends(require_permission("task:item:view"))]
 ItemCreatePerm = Annotated[Principal, Depends(require_permission("task:item:create"))]
 ItemEdit = Annotated[Principal, Depends(require_permission("task:item:edit"))]
+ItemDelete = Annotated[Principal, Depends(require_permission("task:item:delete"))]
 ItemTransition = Annotated[Principal, Depends(require_permission("task:item:transition"))]
 ItemAssign = Annotated[Principal, Depends(require_permission("task:item:assign"))]
 ItemCommentPerm = Annotated[Principal, Depends(require_permission("task:item:comment"))]
@@ -431,6 +432,19 @@ async def update_item(
         )
     await session.commit()
     return JSONResponse(envelope(request, item_payload(item)))
+
+
+@router.delete("/backlog/{item_id}", status_code=204, summary="Delete an item")
+async def delete_item(
+    item_id: UUID,
+    principal: ItemDelete,
+    request: Request,
+    session: SessionDep,
+) -> Response:
+    item = await accessible_item(session, request, principal, item_id)
+    item.deleted_at = datetime.now(tz=UTC)
+    await session.commit()
+    return Response(status_code=204)
 
 
 @router.post("/backlog/{item_id}/transition", summary="Change item status")
