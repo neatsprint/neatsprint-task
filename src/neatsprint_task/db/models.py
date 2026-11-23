@@ -157,6 +157,23 @@ class ItemComment(Base, TenantMixin, TimestampMixin, SoftDeleteMixin):
     edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class ItemAttachment(Base, TenantMixin, TimestampMixin):
+    __tablename__ = "item_attachments"
+    __table_args__ = (Index("ix_attachments_item", "item_id", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=new_id
+    )
+    item_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("backlog_items.id", ondelete="CASCADE"), nullable=False
+    )
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    uploaded_by: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+
+
 class ItemHistory(Base, TenantMixin):
     __tablename__ = "item_history"
     __table_args__ = (Index("ix_history_item", "item_id", "created_at"),)

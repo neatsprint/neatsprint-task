@@ -17,6 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from neatsprint_task.api.schemas import (
     AssignRequest,
+    AttachmentConfirm,
+    AttachmentPresign,
     CommentCreate,
     ItemCreate,
     ItemUpdate,
@@ -30,10 +32,17 @@ from neatsprint_task.api.schemas import (
 from neatsprint_task.db.models import (
     ITEM_STATUSES,
     BacklogItem,
+    ItemAttachment,
     ItemComment,
     ItemHistory,
     Project,
     Sprint,
+)
+from neatsprint_task.services.storage import (
+    ALLOWED_TYPES,
+    attachment_key,
+    presign_get,
+    presign_put,
 )
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -702,6 +711,117 @@ async def remove_sprint_item(
         item.sprint_id = None
         await session.commit()
     return Response(status_code=204)
+
+
+@router.post(
+    "/backlog/{item_id}/attachments/presign",
+    summary="Prepare an attachment upload",
+)
+async def presign_attachment(
+    item_id: UUID,
+    payload: AttachmentPresign,
+    principal: ItemEdit,
+    request: Request,
+    session: SessionDep,
+) -> JSONResponse:
+    item = await _item(session, principal.tenant_id, item_id)
+    if payload.content_type not in ALLOWED_TYPES:
+        raise ApiError(422, "validation_failed", "That file type is not allowed.")
+    key = attachment_key(str(principal.tenant_id), str(item.id), payload.file_name)
+    return JSONResponse(
+        envelope(
+            request,
+            {
+                "upload_url": presign_put(request, key, payload.content_type),
+                "object_key": key,
+                "expires_in": 300,
+            },
+        )
+    )
+
+
+@router.post(
+    "/backlog/{item_id}/attachments",
+    status_code=201,
+    summary="Confirm an attachment upload",
+)
+async def confirm_attachment(
+    item_id: UUID,
+    payload: AttachmentConfirm,
+    principal: ItemEdit,
+    request: Request,
+    session: SessionDep,
+) -> JSONResponse:
+    item = await _item(session, principal.tenant_id, item_id)
+    prefix = f"tenant/{principal.tenant_id}/items/{item.id}/"
+    if not payload.object_key.startswith(prefix):
+        raise ApiError(422, "validation_failed", "Invalid object key.")
+    attachment = ItemAttachment(
+        tenant_id=principal.tenant_id,
+        item_id=item.id,
+        file_name=payload.file_name,
+        content_type=payload.content_type,
+        size_bytes=payload.size_bytes,
+        storage_key=payload.object_key,
+        uploaded_by=principal.user_id,
+    )
+    session.add(attachment)
+    await session.commit()
+    return JSONResponse(
+        envelope(
+            request,
+            {
+                "id": str(attachment.id),
+                "file_name": attachment.file_name,
+                "content_type": attachment.content_type,
+                "size_bytes": attachment.size_bytes,
+            },
+        ),
+        status_code=201,
+    )
+
+
+@router.get("/backlog/{item_id}/attachments", summary="List attachments")
+async def list_attachments(
+    item_id: UUID, principal: ItemView, request: Request, session: SessionDep
+) -> JSONResponse:
+    await _item(session, principal.tenant_id, item_id)
+    rows = (
+        await session.execute(
+            select(ItemAttachment)
+            .where(
+                ItemAttachment.item_id == item_id,
+                ItemAttachment.tenant_id == principal.tenant_id,
+            )
+            .order_by(ItemAttachment.created_at)
+        )
+    ).scalars()
+    return JSONResponse(
+        envelope(
+            request,
+            [
+                {
+                    "id": str(row.id),
+                    "file_name": row.file_name,
+                    "content_type": row.content_type,
+                    "size_bytes": row.size_bytes,
+                }
+                for row in rows
+            ],
+        )
+    )
+
+
+@router.get("/attachments/{attachment_id}/url", summary="Attachment download link")
+async def attachment_url(
+    attachment_id: UUID, principal: ItemView, request: Request, session: SessionDep
+) -> JSONResponse:
+    attachment = await session.get(ItemAttachment, attachment_id)
+    if attachment is None or attachment.tenant_id != principal.tenant_id:
+        raise ApiError(404, "not_found", "Attachment not found.")
+    return JSONResponse(
+        envelope(request, {"download_url": presign_get(request, attachment.storage_key)})
+    )
 
 
 async def _service_guard(

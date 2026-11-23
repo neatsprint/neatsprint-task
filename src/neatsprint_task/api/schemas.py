@@ -72,3 +72,16 @@ class SprintCreate(BaseModel):
 
 class SprintItemsRequest(BaseModel):
     item_ids: list[UUID] = Field(min_length=1)
+
+
+class AttachmentPresign(BaseModel):
+    file_name: str = Field(min_length=1, max_length=255)
+    content_type: str = Field(min_length=3, max_length=128)
+    size_bytes: int = Field(ge=1, le=25 * 1024 * 1024)
+
+
+class AttachmentConfirm(BaseModel):
+    object_key: str = Field(min_length=10, max_length=512)
+    file_name: str = Field(min_length=1, max_length=255)
+    content_type: str = Field(min_length=3, max_length=128)
+    size_bytes: int = Field(ge=1, le=25 * 1024 * 1024)
