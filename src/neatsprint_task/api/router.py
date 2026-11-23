@@ -40,6 +40,12 @@ from neatsprint_task.db.models import (
     ProjectTeam,
     Sprint,
 )
+from neatsprint_task.services.access import (
+    accessible_item,
+    accessible_project,
+    accessible_projects,
+    accessible_sprint,
+)
 from neatsprint_task.services.storage import (
     ALLOWED_TYPES,
     attachment_key,
@@ -151,32 +157,12 @@ def history(
     )
 
 
-async def _project(session: AsyncSession, tenant_id: UUID, project_id: UUID) -> Project:
-    project = await session.get(Project, project_id)
-    if project is None or project.tenant_id != tenant_id:
-        raise ApiError(404, "not_found", "Project not found.")
-    return project
-
-
-async def _item(session: AsyncSession, tenant_id: UUID, item_id: UUID) -> BacklogItem:
-    item = await session.get(BacklogItem, item_id)
-    if item is None or item.tenant_id != tenant_id or item.deleted_at is not None:
-        raise ApiError(404, "not_found", "Item not found.")
-    return item
-
-
 @router.get("/projects", summary="List projects")
 async def list_projects(
     principal: ProjectView, request: Request, session: SessionDep
 ) -> JSONResponse:
-    rows = (
-        await session.execute(
-            select(Project)
-            .where(Project.tenant_id == principal.tenant_id, Project.status == "ACTIVE")
-            .order_by(Project.name)
-        )
-    ).scalars()
-    return JSONResponse(envelope(request, [project_payload(project) for project in rows]))
+    projects = await accessible_projects(session, request, principal)
+    return JSONResponse(envelope(request, [project_payload(project) for project in projects]))
 
 
 @router.post("/projects", status_code=201, summary="Create a project")
@@ -218,7 +204,7 @@ async def create_project(
 async def read_project(
     project_id: UUID, principal: ProjectView, request: Request, session: SessionDep
 ) -> JSONResponse:
-    project = await _project(session, principal.tenant_id, project_id)
+    project = await accessible_project(session, request, principal, project_id)
     return JSONResponse(envelope(request, project_payload(project)))
 
 
@@ -230,7 +216,7 @@ async def update_project(
     request: Request,
     session: SessionDep,
 ) -> JSONResponse:
-    project = await _project(session, principal.tenant_id, project_id)
+    project = await accessible_project(session, request, principal, project_id)
     if payload.name is not None:
         project.name = payload.name
     if payload.description is not None:
@@ -247,7 +233,7 @@ async def update_project(
 async def project_teams(
     project_id: UUID, principal: ItemView, request: Request, session: SessionDep
 ) -> JSONResponse:
-    await _project(session, principal.tenant_id, project_id)
+    await accessible_project(session, request, principal, project_id)
     rows = (
         await session.execute(
             select(ProjectTeam.team_id).where(
@@ -267,7 +253,7 @@ async def set_project_teams(
     request: Request,
     session: SessionDep,
 ) -> JSONResponse:
-    await _project(session, principal.tenant_id, project_id)
+    await accessible_project(session, request, principal, project_id)
     await session.execute(
         delete(ProjectTeam).where(
             ProjectTeam.project_id == project_id,
@@ -293,7 +279,7 @@ async def archive_project(
     request: Request,
     session: SessionDep,
 ) -> JSONResponse:
-    project = await _project(session, principal.tenant_id, project_id)
+    project = await accessible_project(session, request, principal, project_id)
     project.status = "ARCHIVED"
     await session.commit()
     return JSONResponse(envelope(request, project_payload(project)))
@@ -306,7 +292,7 @@ async def project_backlog(
     request: Request,
     session: SessionDep,
 ) -> JSONResponse:
-    await _project(session, principal.tenant_id, project_id)
+    await accessible_project(session, request, principal, project_id)
     rows = (
         await session.execute(
             select(BacklogItem)
@@ -329,7 +315,7 @@ async def project_board(
     session: SessionDep,
     sprint_id: UUID | None = Query(default=None),
 ) -> JSONResponse:
-    await _project(session, principal.tenant_id, project_id)
+    await accessible_project(session, request, principal, project_id)
     query = select(BacklogItem).where(
         BacklogItem.tenant_id == principal.tenant_id,
         BacklogItem.project_id == project_id,
@@ -355,7 +341,7 @@ async def project_board(
 async def create_item(
     payload: ItemCreate, principal: ItemCreatePerm, request: Request, session: SessionDep
 ) -> JSONResponse:
-    project = await _project(session, principal.tenant_id, payload.project_id)
+    project = await accessible_project(session, request, principal, payload.project_id)
     if project.status != "ACTIVE":
         raise ApiError(422, "project_archived", "Archived projects are read-only.")
 
@@ -409,7 +395,7 @@ async def create_item(
 async def read_item(
     item_id: UUID, principal: ItemView, request: Request, session: SessionDep
 ) -> JSONResponse:
-    item = await _item(session, principal.tenant_id, item_id)
+    item = await accessible_item(session, request, principal, item_id)
     return JSONResponse(envelope(request, item_payload(item)))
 
 
@@ -421,7 +407,7 @@ async def update_item(
     request: Request,
     session: SessionDep,
 ) -> JSONResponse:
-    item = await _item(session, principal.tenant_id, item_id)
+    item = await accessible_item(session, request, principal, item_id)
     data = payload.model_dump(exclude_unset=True)
     for field in ("title", "description", "priority", "estimate_points", "due_date", "sprint_id"):
         if field in data:
@@ -448,7 +434,7 @@ async def transition_item(
     request: Request,
     session: SessionDep,
 ) -> JSONResponse:
-    item = await _item(session, principal.tenant_id, item_id)
+    item = await accessible_item(session, request, principal, item_id)
     if payload.status == item.status:
         return JSONResponse(envelope(request, item_payload(item)))
     if payload.status not in TRANSITIONS.get(item.status, set()):
@@ -485,7 +471,7 @@ async def assign_item(
     request: Request,
     session: SessionDep,
 ) -> JSONResponse:
-    item = await _item(session, principal.tenant_id, item_id)
+    item = await accessible_item(session, request, principal, item_id)
     before = str(item.assignee_id) if item.assignee_id else None
     item.assignee_id = payload.assignee_id
     history(
@@ -508,14 +494,14 @@ async def rank_item(
     request: Request,
     session: SessionDep,
 ) -> JSONResponse:
-    item = await _item(session, principal.tenant_id, item_id)
+    item = await accessible_item(session, request, principal, item_id)
     before_item = (
-        await _item(session, principal.tenant_id, payload.before_item_id)
+        await accessible_item(session, request, principal, payload.before_item_id)
         if payload.before_item_id
         else None
     )
     after_item = (
-        await _item(session, principal.tenant_id, payload.after_item_id)
+        await accessible_item(session, request, principal, payload.after_item_id)
         if payload.after_item_id
         else None
     )
@@ -548,7 +534,7 @@ async def rank_item(
 async def list_comments(
     item_id: UUID, principal: ItemView, request: Request, session: SessionDep
 ) -> JSONResponse:
-    await _item(session, principal.tenant_id, item_id)
+    await accessible_item(session, request, principal, item_id)
     rows = (
         await session.execute(
             select(ItemComment)
@@ -580,7 +566,7 @@ async def add_comment(
     request: Request,
     session: SessionDep,
 ) -> JSONResponse:
-    await _item(session, principal.tenant_id, item_id)
+    await accessible_item(session, request, principal, item_id)
     comment = ItemComment(
         id=new_id(),
         tenant_id=principal.tenant_id,
@@ -602,7 +588,7 @@ async def list_sprints(
     session: SessionDep,
     project_id: UUID = Query(...),
 ) -> JSONResponse:
-    await _project(session, principal.tenant_id, project_id)
+    await accessible_project(session, request, principal, project_id)
     rows = (
         await session.execute(
             select(Sprint).where(Sprint.project_id == project_id).order_by(Sprint.created_at)
@@ -615,7 +601,7 @@ async def list_sprints(
 async def create_sprint(
     payload: SprintCreate, principal: SprintManage, request: Request, session: SessionDep
 ) -> JSONResponse:
-    await _project(session, principal.tenant_id, payload.project_id)
+    await accessible_project(session, request, principal, payload.project_id)
     sprint = Sprint(
         id=new_id(),
         tenant_id=principal.tenant_id,
@@ -634,9 +620,7 @@ async def create_sprint(
 async def sprint_items(
     sprint_id: UUID, principal: SprintView, request: Request, session: SessionDep
 ) -> JSONResponse:
-    sprint = await session.get(Sprint, sprint_id)
-    if sprint is None or sprint.tenant_id != principal.tenant_id:
-        raise ApiError(404, "not_found", "Sprint not found.")
+    await accessible_sprint(session, request, principal, sprint_id)
     rows = (
         await session.execute(
             select(BacklogItem)
@@ -655,9 +639,7 @@ async def sprint_items(
 async def start_sprint(
     sprint_id: UUID, principal: SprintManage, request: Request, session: SessionDep
 ) -> JSONResponse:
-    sprint = await session.get(Sprint, sprint_id)
-    if sprint is None or sprint.tenant_id != principal.tenant_id:
-        raise ApiError(404, "not_found", "Sprint not found.")
+    sprint = await accessible_sprint(session, request, principal, sprint_id)
     active = (
         await session.execute(
             select(Sprint.id).where(
@@ -692,9 +674,7 @@ async def start_sprint(
 async def complete_sprint(
     sprint_id: UUID, principal: SprintManage, request: Request, session: SessionDep
 ) -> JSONResponse:
-    sprint = await session.get(Sprint, sprint_id)
-    if sprint is None or sprint.tenant_id != principal.tenant_id:
-        raise ApiError(404, "not_found", "Sprint not found.")
+    sprint = await accessible_sprint(session, request, principal, sprint_id)
     sprint.state = "COMPLETED"
     sprint.completed_at = datetime.now(tz=UTC)
     carried = (
@@ -725,9 +705,7 @@ async def add_sprint_items(
     request: Request,
     session: SessionDep,
 ) -> JSONResponse:
-    sprint = await session.get(Sprint, sprint_id)
-    if sprint is None or sprint.tenant_id != principal.tenant_id:
-        raise ApiError(404, "not_found", "Sprint not found.")
+    sprint = await accessible_sprint(session, request, principal, sprint_id)
     updated = (
         await session.execute(
             update(BacklogItem)
@@ -751,7 +729,7 @@ async def remove_sprint_item(
     request: Request,
     session: SessionDep,
 ) -> Response:
-    item = await _item(session, principal.tenant_id, item_id)
+    item = await accessible_item(session, request, principal, item_id)
     if item.sprint_id == sprint_id:
         item.sprint_id = None
         await session.commit()
@@ -769,7 +747,7 @@ async def presign_attachment(
     request: Request,
     session: SessionDep,
 ) -> JSONResponse:
-    item = await _item(session, principal.tenant_id, item_id)
+    item = await accessible_item(session, request, principal, item_id)
     if payload.content_type not in ALLOWED_TYPES:
         raise ApiError(422, "validation_failed", "That file type is not allowed.")
     key = attachment_key(str(principal.tenant_id), str(item.id), payload.file_name)
@@ -797,7 +775,7 @@ async def confirm_attachment(
     request: Request,
     session: SessionDep,
 ) -> JSONResponse:
-    item = await _item(session, principal.tenant_id, item_id)
+    item = await accessible_item(session, request, principal, item_id)
     prefix = f"tenant/{principal.tenant_id}/items/{item.id}/"
     if not payload.object_key.startswith(prefix):
         raise ApiError(422, "validation_failed", "Invalid object key.")
@@ -830,7 +808,7 @@ async def confirm_attachment(
 async def list_attachments(
     item_id: UUID, principal: ItemView, request: Request, session: SessionDep
 ) -> JSONResponse:
-    await _item(session, principal.tenant_id, item_id)
+    await accessible_item(session, request, principal, item_id)
     rows = (
         await session.execute(
             select(ItemAttachment)
@@ -864,6 +842,7 @@ async def attachment_url(
     attachment = await session.get(ItemAttachment, attachment_id)
     if attachment is None or attachment.tenant_id != principal.tenant_id:
         raise ApiError(404, "not_found", "Attachment not found.")
+    await accessible_item(session, request, principal, attachment.item_id)
     return JSONResponse(
         envelope(request, {"download_url": presign_get(request, attachment.storage_key)})
     )
