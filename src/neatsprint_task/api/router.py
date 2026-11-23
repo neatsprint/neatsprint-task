@@ -159,6 +159,31 @@ def history(
     )
 
 
+def enqueue_assignment(
+    session: AsyncSession,
+    *,
+    item: BacklogItem,
+    actor_id: UUID,
+    assignee_id: UUID | None,
+) -> None:
+    """Emit ``item.assigned`` unless the change is empty or self-assignment."""
+    if assignee_id is None or assignee_id == actor_id:
+        return
+    enqueue(
+        session,
+        event_type="item.assigned",
+        tenant_id=item.tenant_id,
+        actor_id=actor_id,
+        payload={
+            "item_id": str(item.id),
+            "project_id": str(item.project_id),
+            "key": item.key,
+            "title": item.title,
+            "assignee_id": str(assignee_id),
+        },
+    )
+
+
 @router.get("/projects", summary="List projects")
 async def list_projects(
     principal: ProjectView, request: Request, session: SessionDep
@@ -392,6 +417,12 @@ async def create_item(
         actor_id=principal.user_id,
         payload={"item_id": str(item.id), "project_id": str(item.project_id), "key": item.key},
     )
+    enqueue_assignment(
+        session,
+        item=item,
+        actor_id=principal.user_id,
+        assignee_id=item.assignee_id,
+    )
     await session.commit()
     return JSONResponse(envelope(request, item_payload(item)), status_code=201)
 
@@ -414,6 +445,7 @@ async def update_item(
 ) -> JSONResponse:
     item = await accessible_item(session, request, principal, item_id)
     data = payload.model_dump(exclude_unset=True)
+    previous_assignee = item.assignee_id
     for field in ("title", "description", "priority", "estimate_points", "due_date", "sprint_id"):
         if field in data:
             setattr(item, field, data[field])
@@ -427,9 +459,16 @@ async def update_item(
             item=item,
             actor_id=principal.user_id,
             field="assignee",
-            before=None,
+            before=str(previous_assignee) if previous_assignee else None,
             after=str(data["assignee_id"]) if data["assignee_id"] else None,
         )
+        if data["assignee_id"] != previous_assignee:
+            enqueue_assignment(
+                session,
+                item=item,
+                actor_id=principal.user_id,
+                assignee_id=data["assignee_id"],
+            )
     await session.commit()
     return JSONResponse(envelope(request, item_payload(item)))
 
@@ -496,7 +535,8 @@ async def assign_item(
     await ensure_assignable(
         session, request, principal.tenant_id, item.project_id, payload.assignee_id
     )
-    before = str(item.assignee_id) if item.assignee_id else None
+    previous_assignee = item.assignee_id
+    before = str(previous_assignee) if previous_assignee else None
     item.assignee_id = payload.assignee_id
     history(
         session,
@@ -506,6 +546,13 @@ async def assign_item(
         before=before,
         after=str(payload.assignee_id) if payload.assignee_id else None,
     )
+    if payload.assignee_id != previous_assignee:
+        enqueue_assignment(
+            session,
+            item=item,
+            actor_id=principal.user_id,
+            assignee_id=payload.assignee_id,
+        )
     await session.commit()
     return JSONResponse(envelope(request, item_payload(item)))
 
