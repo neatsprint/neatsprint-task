@@ -553,6 +553,27 @@ async def create_sprint(
     return JSONResponse(envelope(request, sprint_payload(sprint)), status_code=201)
 
 
+@router.get("/sprints/{sprint_id}/items", summary="Items committed to a sprint")
+async def sprint_items(
+    sprint_id: UUID, principal: SprintView, request: Request, session: SessionDep
+) -> JSONResponse:
+    sprint = await session.get(Sprint, sprint_id)
+    if sprint is None or sprint.tenant_id != principal.tenant_id:
+        raise ApiError(404, "not_found", "Sprint not found.")
+    rows = (
+        await session.execute(
+            select(BacklogItem)
+            .where(
+                BacklogItem.sprint_id == sprint_id,
+                BacklogItem.tenant_id == principal.tenant_id,
+                BacklogItem.deleted_at.is_(None),
+            )
+            .order_by(BacklogItem.rank)
+        )
+    ).scalars()
+    return JSONResponse(envelope(request, [item_payload(item) for item in rows]))
+
+
 @router.post("/sprints/{sprint_id}/start", summary="Start a sprint")
 async def start_sprint(
     sprint_id: UUID, principal: SprintManage, request: Request, session: SessionDep
