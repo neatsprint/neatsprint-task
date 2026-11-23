@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse, Response
 from neatsprint_lib.auth import Principal, require_permission
 from neatsprint_lib.db import bind_tenant, get_session, get_tenant_session
 from neatsprint_lib.errors import ApiError
+from neatsprint_lib.events import enqueue
 from neatsprint_lib.ids import new_id
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -191,6 +192,13 @@ async def create_project(
         created_by=principal.user_id,
     )
     session.add(project)
+    enqueue(
+        session,
+        event_type="project.created",
+        tenant_id=principal.tenant_id,
+        actor_id=principal.user_id,
+        payload={"project_id": str(project.id), "key": project.key, "name": project.name},
+    )
     await session.commit()
     return JSONResponse(envelope(request, project_payload(project)), status_code=201)
 
@@ -332,6 +340,13 @@ async def create_item(
         created_by=principal.user_id,
     )
     session.add(item)
+    enqueue(
+        session,
+        event_type="item.created",
+        tenant_id=principal.tenant_id,
+        actor_id=principal.user_id,
+        payload={"item_id": str(item.id), "project_id": str(item.project_id), "key": item.key},
+    )
     await session.commit()
     return JSONResponse(envelope(request, item_payload(item)), status_code=201)
 
@@ -396,6 +411,13 @@ async def transition_item(
         field="status",
         before=before,
         after=payload.status,
+    )
+    enqueue(
+        session,
+        event_type="item.transitioned",
+        tenant_id=principal.tenant_id,
+        actor_id=principal.user_id,
+        payload={"item_id": str(item.id), "from": before, "to": payload.status},
     )
     await session.commit()
     return JSONResponse(envelope(request, item_payload(item)))
@@ -601,6 +623,13 @@ async def start_sprint(
     sprint.state = "ACTIVE"
     sprint.started_at = datetime.now(tz=UTC)
     sprint.committed_points = total
+    enqueue(
+        session,
+        event_type="sprint.started",
+        tenant_id=principal.tenant_id,
+        actor_id=principal.user_id,
+        payload={"sprint_id": str(sprint.id), "project_id": str(sprint.project_id)},
+    )
     await session.commit()
     return JSONResponse(envelope(request, sprint_payload(sprint)))
 
@@ -621,6 +650,13 @@ async def complete_sprint(
             .values(sprint_id=None)
         )
     ).rowcount  # type: ignore[attr-defined]
+    enqueue(
+        session,
+        event_type="sprint.completed",
+        tenant_id=principal.tenant_id,
+        actor_id=principal.user_id,
+        payload={"sprint_id": str(sprint.id), "carried_over": carried},
+    )
     await session.commit()
     return JSONResponse(
         envelope(request, {**sprint_payload(sprint), "carried_over": carried})

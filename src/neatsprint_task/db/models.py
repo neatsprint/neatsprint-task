@@ -6,6 +6,7 @@ import uuid
 from datetime import date, datetime
 
 from neatsprint_lib.db import Base, SoftDeleteMixin, TenantMixin, TimestampMixin
+from neatsprint_lib.events import OutboxEvent as OutboxEvent  # noqa: F401 - register table
 from neatsprint_lib.ids import new_id
 from sqlalchemy import (
     CheckConstraint,
@@ -19,6 +20,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -62,6 +64,12 @@ class Sprint(Base, TenantMixin, TimestampMixin):
     __table_args__ = (
         CheckConstraint("state IN ('PLANNED','ACTIVE','COMPLETED')", name="state"),
         Index("ix_sprints_project_state", "project_id", "state"),
+        Index(
+            "ux_one_active_sprint",
+            "project_id",
+            unique=True,
+            postgresql_where=text("state = 'ACTIVE'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
