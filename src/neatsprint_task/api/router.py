@@ -8,7 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, Query, Request
 from fastapi.responses import JSONResponse, Response
 from neatsprint_lib.auth import Principal, require_permission
-from neatsprint_lib.db import get_session
+from neatsprint_lib.db import bind_tenant, get_session, get_tenant_session
 from neatsprint_lib.errors import ApiError
 from neatsprint_lib.ids import new_id
 from sqlalchemy import func, select, update
@@ -38,7 +38,8 @@ from neatsprint_task.db.models import (
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 internal_router = APIRouter(prefix="/internal", tags=["internal"])
 
-SessionDep = Annotated[AsyncSession, Depends(get_session)]
+SessionDep = Annotated[AsyncSession, Depends(get_tenant_session)]
+AdminSessionDep = Annotated[AsyncSession, Depends(get_session)]
 ProjectView = Annotated[Principal, Depends(require_permission("task:project:view"))]
 ProjectCreatePerm = Annotated[Principal, Depends(require_permission("task:project:create"))]
 ProjectEdit = Annotated[Principal, Depends(require_permission("task:project:edit"))]
@@ -686,8 +687,9 @@ async def internal_item(
     tenant_id: UUID,
     _: ServiceDep,
     request: Request,
-    session: SessionDep,
+    session: AdminSessionDep,
 ) -> JSONResponse:
+    bind_tenant(session, tenant_id)
     item = await session.get(BacklogItem, item_id)
     if item is None or item.tenant_id != tenant_id or item.deleted_at is not None:
         raise ApiError(404, "not_found", "Item not found.")
