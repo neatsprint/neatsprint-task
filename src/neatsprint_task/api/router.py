@@ -1129,3 +1129,52 @@ async def internal_item(
             },
         )
     )
+
+
+@internal_router.get("/items", summary="Internal paginated item facts")
+async def internal_items(
+    tenant_id: UUID,
+    _: ServiceDep,
+    request: Request,
+    session: AdminSessionDep,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> JSONResponse:
+    bind_tenant(session, tenant_id)
+    rows = (
+        await session.execute(
+            select(BacklogItem)
+            .where(
+                BacklogItem.tenant_id == tenant_id,
+                BacklogItem.deleted_at.is_(None),
+            )
+            .order_by(BacklogItem.created_at, BacklogItem.id)
+            .offset(offset)
+            .limit(limit)
+        )
+    ).scalars()
+    return JSONResponse(
+        envelope(
+            request,
+            [
+                {
+                    "item_id": str(row.id),
+                    "project_id": str(row.project_id),
+                    "title": row.title,
+                    "status": row.status,
+                    "sprint_id": str(row.sprint_id) if row.sprint_id else None,
+                    "assignee_id": str(row.assignee_id) if row.assignee_id else None,
+                    "estimate_points": (
+                        float(row.estimate_points)
+                        if row.estimate_points is not None
+                        else None
+                    ),
+                    "created_at": row.created_at.isoformat(),
+                    "completed_at": (
+                        row.completed_at.isoformat() if row.completed_at else None
+                    ),
+                }
+                for row in rows
+            ],
+        )
+    )
