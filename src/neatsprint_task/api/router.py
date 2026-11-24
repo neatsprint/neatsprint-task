@@ -12,7 +12,7 @@ from neatsprint_lib.db import bind_tenant, get_session, get_tenant_session
 from neatsprint_lib.errors import ApiError
 from neatsprint_lib.events import enqueue
 from neatsprint_lib.ids import new_id
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from neatsprint_task.api.schemas import (
@@ -26,6 +26,7 @@ from neatsprint_task.api.schemas import (
     ProjectTeamsRequest,
     ProjectUpdate,
     RankRequest,
+    SavedViewCreate,
     SprintCreate,
     SprintItemsRequest,
     TransitionRequest,
@@ -38,6 +39,7 @@ from neatsprint_task.db.models import (
     ItemHistory,
     Project,
     ProjectTeam,
+    SavedView,
     Sprint,
 )
 from neatsprint_task.services.access import (
@@ -101,8 +103,7 @@ def project_payload(project: Project) -> dict[str, object]:
     }
 
 
-def item_payload(item: BacklogItem) -> dict[str, object]:
-    return {
+def item_payload(item: BacklogItem) -> dict[str, object]:    return {
         "id": str(item.id),
         "key": item.key,
         "project_id": str(item.project_id),
@@ -135,6 +136,17 @@ def sprint_payload(sprint: Sprint) -> dict[str, object]:
         "committed_points": float(sprint.committed_points)
         if sprint.committed_points is not None
         else None,
+    }
+
+
+def saved_view_payload(view: SavedView) -> dict[str, object]:
+    return {
+        "id": str(view.id),
+        "project_id": str(view.project_id),
+        "name": view.name,
+        "view_type": view.view_type,
+        "filters": view.filters,
+        "created_at": view.created_at.isoformat(),
     }
 
 
@@ -190,6 +202,50 @@ async def list_projects(
 ) -> JSONResponse:
     projects = await accessible_projects(session, request, principal)
     return JSONResponse(envelope(request, [project_payload(project) for project in projects]))
+
+
+@router.get("/search", summary="Search projects and backlog items")
+async def search(
+    principal: ItemView,
+    request: Request,
+    session: SessionDep,
+    q: str = Query(min_length=1, max_length=120),
+) -> JSONResponse:
+    projects = await accessible_projects(session, request, principal)
+    term = q.strip().lower()
+    matching_projects = [
+        project
+        for project in projects
+        if term in project.name.lower() or term in project.key.lower()
+    ][:10]
+    items: list[BacklogItem] = []
+    if projects:
+        rows = (
+            await session.execute(
+                select(BacklogItem)
+                .where(
+                    BacklogItem.tenant_id == principal.tenant_id,
+                    BacklogItem.project_id.in_([project.id for project in projects]),
+                    BacklogItem.deleted_at.is_(None),
+                    or_(
+                        func.lower(BacklogItem.title).like(f"%{term}%"),
+                        func.lower(BacklogItem.key).like(f"%{term}%"),
+                    ),
+                )
+                .order_by(BacklogItem.rank)
+                .limit(20)
+            )
+        ).scalars()
+        items = list(rows)
+    return JSONResponse(
+        envelope(
+            request,
+            {
+                "projects": [project_payload(project) for project in matching_projects],
+                "items": [item_payload(item) for item in items],
+            },
+        )
+    )
 
 
 @router.post("/projects", status_code=201, summary="Create a project")
@@ -297,6 +353,89 @@ async def set_project_teams(
         )
     await session.commit()
     return JSONResponse(envelope(request, {"team_ids": [str(item) for item in payload.team_ids]}))
+
+
+@router.get("/projects/{project_id}/views", summary="List saved views")
+async def list_saved_views(
+    project_id: UUID,
+    principal: ItemView,
+    request: Request,
+    session: SessionDep,
+    view_type: str | None = Query(default=None, pattern="^(BACKLOG|BOARD)$"),
+) -> JSONResponse:
+    await accessible_project(session, request, principal, project_id)
+    query = select(SavedView).where(
+        SavedView.tenant_id == principal.tenant_id,
+        SavedView.user_id == principal.user_id,
+        SavedView.project_id == project_id,
+    )
+    if view_type:
+        query = query.where(SavedView.view_type == view_type)
+    rows = (
+        await session.execute(query.order_by(SavedView.created_at))
+    ).scalars()
+    return JSONResponse(envelope(request, [saved_view_payload(view) for view in rows]))
+
+
+@router.post("/projects/{project_id}/views", status_code=201, summary="Save a view")
+async def create_saved_view(
+    project_id: UUID,
+    payload: SavedViewCreate,
+    principal: ItemView,
+    request: Request,
+    session: SessionDep,
+) -> JSONResponse:
+    await accessible_project(session, request, principal, project_id)
+    name = payload.name.strip()
+    existing = (
+        await session.execute(
+            select(SavedView.id).where(
+                SavedView.tenant_id == principal.tenant_id,
+                SavedView.user_id == principal.user_id,
+                SavedView.project_id == project_id,
+                SavedView.name == name,
+            )
+        )
+    ).first()
+    if existing is not None:
+        raise ApiError(409, "duplicate_name", "A saved view with that name already exists.")
+    view = SavedView(
+        tenant_id=principal.tenant_id,
+        user_id=principal.user_id,
+        project_id=project_id,
+        name=name,
+        view_type=payload.view_type,
+        filters=payload.filters,
+    )
+    session.add(view)
+    await session.commit()
+    return JSONResponse(envelope(request, saved_view_payload(view)), status_code=201)
+
+
+@router.delete(
+    "/projects/{project_id}/views/{view_id}",
+    status_code=204,
+    summary="Delete a saved view",
+)
+async def delete_saved_view(
+    project_id: UUID,
+    view_id: UUID,
+    principal: ItemView,
+    request: Request,
+    session: SessionDep,
+) -> Response:
+    await accessible_project(session, request, principal, project_id)
+    view = await session.get(SavedView, view_id)
+    if (
+        view is None
+        or view.tenant_id != principal.tenant_id
+        or view.user_id != principal.user_id
+        or view.project_id != project_id
+    ):
+        raise ApiError(404, "not_found", "Saved view not found.")
+    await session.delete(view)
+    await session.commit()
+    return Response(status_code=204)
 
 
 @router.post("/projects/{project_id}/archive", summary="Archive a project")

@@ -89,3 +89,9 @@ class AttachmentConfirm(BaseModel):
 
 class ProjectTeamsRequest(BaseModel):
     team_ids: list[UUID] = Field(default_factory=list)
+
+
+class SavedViewCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    view_type: str = Field(default="BACKLOG", pattern="^(BACKLOG|BOARD)$")
+    filters: dict[str, object] = Field(default_factory=dict)
