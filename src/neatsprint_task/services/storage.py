@@ -72,3 +72,20 @@ def presign_get(request: Request, key: str) -> str:
         )
     except (BotoCoreError, ClientError) as exc:
         raise ApiError(404, "not_found", "Attachment not found.") from exc
+
+
+def get_object(request: Request, key: str) -> bytes:
+    settings = request.app.state.settings
+    try:
+        response = _client(request).get_object(Bucket=settings.s3_bucket, Key=key)
+        return bytes(response["Body"].read())
+    except (BotoCoreError, ClientError) as exc:
+        raise ApiError(404, "not_found", "Attachment not found.") from exc
+
+
+def delete_object(request: Request, key: str) -> None:
+    settings = request.app.state.settings
+    try:
+        _client(request).delete_object(Bucket=settings.s3_bucket, Key=key)
+    except (BotoCoreError, ClientError) as exc:
+        raise ApiError(503, "storage_unavailable", "Could not remove the upload.") from exc

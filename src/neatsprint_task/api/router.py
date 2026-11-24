@@ -52,9 +52,12 @@ from neatsprint_task.services.assignment import ensure_assignable
 from neatsprint_task.services.storage import (
     ALLOWED_TYPES,
     attachment_key,
+    delete_object,
+    get_object,
     presign_get,
     presign_put,
 )
+from neatsprint_task.services.upload_guard import validate_upload, virus_scan
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 internal_router = APIRouter(prefix="/internal", tags=["internal"])
@@ -1022,6 +1025,18 @@ async def confirm_attachment(
     prefix = f"tenant/{principal.tenant_id}/items/{item.id}/"
     if not payload.object_key.startswith(prefix):
         raise ApiError(422, "validation_failed", "Invalid object key.")
+    body = get_object(request, payload.object_key)
+    try:
+        validate_upload(
+            body,
+            payload.content_type,
+            allowed=ALLOWED_TYPES,
+            max_bytes=25 * 1024 * 1024,
+        )
+        await virus_scan(request.app.state.settings, body)
+    except ApiError:
+        delete_object(request, payload.object_key)
+        raise
     attachment = ItemAttachment(
         tenant_id=principal.tenant_id,
         item_id=item.id,

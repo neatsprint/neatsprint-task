@@ -18,6 +18,8 @@ class Settings(ServiceSettings):
     s3_access_key: str | None = None
     s3_secret_key: str | None = None
     s3_region: str = "us-east-1"
+    clamav_host: str | None = None
+    clamav_port: int = 3310
 
 
 settings = Settings()
