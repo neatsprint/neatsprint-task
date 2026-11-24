@@ -415,7 +415,18 @@ async def create_item(
         event_type="item.created",
         tenant_id=principal.tenant_id,
         actor_id=principal.user_id,
-        payload={"item_id": str(item.id), "project_id": str(item.project_id), "key": item.key},
+        payload={
+            "item_id": str(item.id),
+            "project_id": str(item.project_id),
+            "key": item.key,
+            "title": item.title,
+            "status": item.status,
+            "estimate_points": (
+                float(item.estimate_points) if item.estimate_points is not None else None
+            ),
+            "sprint_id": str(item.sprint_id) if item.sprint_id else None,
+            "assignee_id": str(item.assignee_id) if item.assignee_id else None,
+        },
     )
     enqueue_assignment(
         session,
@@ -469,6 +480,23 @@ async def update_item(
                 actor_id=principal.user_id,
                 assignee_id=data["assignee_id"],
             )
+    enqueue(
+        session,
+        event_type="item.updated",
+        tenant_id=principal.tenant_id,
+        actor_id=principal.user_id,
+        payload={
+            "item_id": str(item.id),
+            "project_id": str(item.project_id),
+            "title": item.title,
+            "status": item.status,
+            "sprint_id": str(item.sprint_id) if item.sprint_id else None,
+            "assignee_id": str(item.assignee_id) if item.assignee_id else None,
+            "estimate_points": (
+                float(item.estimate_points) if item.estimate_points is not None else None
+            ),
+        },
+    )
     await session.commit()
     return JSONResponse(envelope(request, item_payload(item)))
 
@@ -517,7 +545,12 @@ async def transition_item(
         event_type="item.transitioned",
         tenant_id=principal.tenant_id,
         actor_id=principal.user_id,
-        payload={"item_id": str(item.id), "from": before, "to": payload.status},
+        payload={
+            "item_id": str(item.id),
+            "project_id": str(item.project_id),
+            "from": before,
+            "to": payload.status,
+        },
     )
     await session.commit()
     return JSONResponse(envelope(request, item_payload(item)))
