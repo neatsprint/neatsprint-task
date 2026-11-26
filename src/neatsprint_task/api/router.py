@@ -1148,9 +1148,35 @@ async def internal_item(
                 "id": str(item.id),
                 "key": item.key,
                 "project_id": str(item.project_id),
+                "sprint_id": str(item.sprint_id) if item.sprint_id else None,
                 "title": item.title,
                 "status": item.status,
                 "assignee_id": str(item.assignee_id) if item.assignee_id else None,
+            },
+        )
+    )
+
+
+@internal_router.get("/sprints/{sprint_id}", summary="Internal sprint lookup")
+async def internal_sprint(
+    sprint_id: UUID,
+    tenant_id: UUID,
+    _: ServiceDep,
+    request: Request,
+    session: AdminSessionDep,
+) -> JSONResponse:
+    bind_tenant(session, tenant_id)
+    sprint = await session.get(Sprint, sprint_id)
+    if sprint is None or sprint.tenant_id != tenant_id:
+        raise ApiError(404, "not_found", "Sprint not found.")
+    return JSONResponse(
+        envelope(
+            request,
+            {
+                "id": str(sprint.id),
+                "project_id": str(sprint.project_id),
+                "name": sprint.name,
+                "state": sprint.state,
             },
         )
     )
