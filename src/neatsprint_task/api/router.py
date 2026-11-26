@@ -652,6 +652,16 @@ async def delete_item(
 ) -> Response:
     item = await accessible_item(session, request, principal, item_id)
     item.deleted_at = datetime.now(tz=UTC)
+    enqueue(
+        session,
+        event_type="item.deleted",
+        tenant_id=principal.tenant_id,
+        actor_id=principal.user_id,
+        payload={
+            "item_id": str(item.id),
+            "project_id": str(item.project_id),
+        },
+    )
     await session.commit()
     return Response(status_code=204)
 
